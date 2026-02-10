@@ -1,6 +1,8 @@
 import cv2 as cv
 import numpy as np
 
+# You can uncomment the block of code according to your preference
+
 Blank = np.zeros((500,500,3), dtype='uint8')
 #cv.imshow('Blank',Blank)
 # Paint the image a certain color ##
@@ -27,4 +29,5 @@ Blank = np.zeros((500,500,3), dtype='uint8')
 cv.putText(Blank,"Let it happen by Tame Impala",(100,200),cv.FONT_HERSHEY_TRIPLEX,0.5,(0,255,0),1)
 cv.imshow("text",Blank)
 cv.waitKey(0)
+
 ## Way to fit the entire text in the window ##
