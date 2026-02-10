@@ -12,8 +12,7 @@ while True:
     isTrue, frame = capture.read()
 
     if not isTrue:
-        break   # 👈 absolutely mandatory
-
+        break   
     video_frame = rescale_frame(frame, 0.75)
 
     cv.imshow('Video_frame', video_frame)
@@ -24,3 +23,4 @@ while True:
 
 capture.release()
 cv.destroyAllWindows()
+
