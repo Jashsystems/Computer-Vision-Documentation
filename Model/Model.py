@@ -1,97 +1,168 @@
 import os
-import numpy as np
 import cv2 as cv
+import numpy as np
 import matplotlib.pyplot as plt
+import gc
+import caer
+import canaro
+
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Flatten, Dropout, Conv2D, MaxPooling2D
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
 from tensorflow.keras.utils import to_categorical
-from tensorflow.keras.optimizers import SGD
-from sklearn.model_selection import train_test_split
+from tensorflow.keras.callbacks import LearningRateScheduler
+from tensorflow.keras.optimizers.legacy import SGD
 
-IMG_SIZE = 80
-DATA_PATH = r'C:\Users\User\Desktop\simpsons_dataset'  # CHANGE THIS
 
-# Get top 10 characters
-char_count = {}
+IMG_SIZE = (80, 80)
+channels = 1
 
-for folder in os.listdir(DATA_PATH):
-    folder_path = os.path.join(DATA_PATH, folder)
-    if os.path.isdir(folder_path):
-        char_count[folder] = len(os.listdir(folder_path))
+data_dir = r'../input/the-simpsons-characters-dataset/simpsons_dataset'
 
-# Sort and take top 10
-characters = sorted(char_count, key=char_count.get, reverse=True)[:10]
 
-print("Characters:", characters)
+# ------------------------------------------------
+#---------- getting top characters----------------
+# ------------------------------------------------
 
-# Load images
-X = []
-y = []
+charCount = {}
 
-for idx, character in enumerate(characters):
-    path = os.path.join(DATA_PATH, character)
-    for img_name in os.listdir(path):
-        try:
-            img = cv.imread(os.path.join(path, img_name))
-            img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-            img = cv.resize(img, (IMG_SIZE, IMG_SIZE))
-            X.append(img)
-            y.append(idx)
-        except:
-            continue
+for folder in os.listdir(data_dir):
+    path = os.path.join(data_dir, folder)
+    if os.path.isdir(path):
+        charCount[folder] = len(os.listdir(path))
 
-X = np.array(X).reshape(-1, IMG_SIZE, IMG_SIZE, 1) / 255.0
-y = to_categorical(y, len(characters))
+charCount = caer.sort_dict(charCount, descending=True)
 
-# Train validation split
-x_train, x_val, y_train, y_val = train_test_split(
-    X, y, test_size=0.2, random_state=42
+characters = []
+for i in range(10):
+    characters.append(charCount[i][0])
+
+print("Using characters:", characters)
+
+
+# --------------------------------------------
+# -------------------loading data-------------
+# --------------------------------------------
+
+data = caer.preprocess_from_dir(
+    data_dir,
+    characters,
+    channels=channels,
+    IMG_SIZE=IMG_SIZE,
+    isShuffle=True
 )
 
-# Build model
+print("Total samples:", len(data))
+
+
+# just checking one image
+plt.imshow(data[0][0], cmap='gray')
+plt.show()
+
+
+# separate features and labels
+X, y = caer.sep_train(data, IMG_SIZE=IMG_SIZE)
+
+X = caer.normalize(X)
+y = to_categorical(y, len(characters))
+
+
+# train / val split
+x_train, x_val, y_train, y_val = caer.train_val_split(X, y, val_ratio=0.2)
+
+# free memory
+del data
+del X
+del y
+gc.collect()
+
+
+BATCH_SIZE = 32
+EPOCHS = 10
+
+
+# data generator (helps accuracy a bit)
+gen = canaro.generators.imageDataGenerator()
+train_gen = gen.flow(x_train, y_train, batch_size=BATCH_SIZE)
+
+
+# -------------------------------------
+# -----------building model------------
+# -------------------------------------
+
+w, h = IMG_SIZE
+
 model = Sequential()
 
 model.add(Conv2D(32, (3,3), activation='relu', padding='same',
-                 input_shape=(IMG_SIZE, IMG_SIZE, 1)))
+                 input_shape=(w, h, channels)))
+model.add(Conv2D(32, (3,3), activation='relu'))
 model.add(MaxPooling2D((2,2)))
 model.add(Dropout(0.2))
 
 model.add(Conv2D(64, (3,3), activation='relu', padding='same'))
+model.add(Conv2D(64, (3,3), activation='relu'))
 model.add(MaxPooling2D((2,2)))
 model.add(Dropout(0.2))
 
-model.add(Conv2D(128, (3,3), activation='relu', padding='same'))
+model.add(Conv2D(256, (3,3), activation='relu', padding='same'))
+model.add(Conv2D(256, (3,3), activation='relu'))
 model.add(MaxPooling2D((2,2)))
 model.add(Dropout(0.2))
 
 model.add(Flatten())
-model.add(Dense(512, activation='relu'))
 model.add(Dropout(0.5))
+model.add(Dense(1024, activation='relu'))
+
+# output layer
 model.add(Dense(len(characters), activation='softmax'))
-
-optimizer = SGD(learning_rate=0.001, momentum=0.9)
-
-model.compile(loss='categorical_crossentropy',
-              optimizer=optimizer,
-              metrics=['accuracy'])
 
 model.summary()
 
-model.fit(
-    x_train,
-    y_train,
-    epochs=10,
-    batch_size=32,
-    validation_data=(x_val, y_val)
+
+# -----------------------------------------
+# ----------------training-----------------
+# -----------------------------------------
+
+opt = SGD(learning_rate=0.001, decay=1e-7, momentum=0.9, nesterov=True)
+
+model.compile(
+    loss='binary_crossentropy',
+    optimizer=opt,
+    metrics=['accuracy']
 )
 
-# Test example
-test_image_path = r'C:\Users\User\Desktop\test.jpg'  # CHANGE THIS
+callbacks = [LearningRateScheduler(canaro.lr_schedule)]
 
-img = cv.imread(test_image_path)
-img_gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-img_resized = cv.resize(img_gray, (IMG_SIZE, IMG_SIZE))
-img_input = img_resized.reshape(1, IMG_SIZE, IMG_SIZE, 1) / 255.0
+history = model.fit(
+    train_gen,
+    steps_per_epoch=len(x_train)//BATCH_SIZE,
+    epochs=EPOCHS,
+    validation_data=(x_val, y_val),
+    validation_steps=len(y_val)//BATCH_SIZE,
+    callbacks=callbacks
+)
 
-prediction = model.predict(img_input)
-print("Prediction:", characters[np.argmax(prediction)])
+print("Classes:", characters)
+
+
+# ------------------------------------
+# ----------testing single image------
+# ------------------------------------
+
+test_img_path = r'../input/the-simpsons-characters-dataset/kaggle_simpson_testset/kaggle_simpson_testset/charles_montgomery_burns_0.jpg'
+
+img = cv.imread(test_img_path)
+
+plt.imshow(img)
+plt.show()
+
+
+def prepare(img):
+    img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    img = cv.resize(img, IMG_SIZE)
+    img = caer.reshape(img, IMG_SIZE, 1)
+    return img
+
+
+pred = model.predict(prepare(img))
+print("Prediction:", characters[np.argmax(pred[0])])
